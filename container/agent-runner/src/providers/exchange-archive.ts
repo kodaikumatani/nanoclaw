@@ -86,8 +86,6 @@ function threadArchiveFilename(
   // Strip the date prefix with the same `dated` regex (not a fixed offset) for
   // an exact suffix match — no substring false-positives, no magic length to
   // drift if the date format changes.
-  // ponytail: O(dir) scan per append — fine at hundreds of threads; cache
-  // thread→filename in memory if conversations/ ever holds thousands.
   const dated = /^\d{4}-\d{2}-\d{2}-/;
   const existing = fs.readdirSync(dir).find((f) => dated.test(f) && f.replace(dated, '') === suffix);
   if (existing) return existing;
