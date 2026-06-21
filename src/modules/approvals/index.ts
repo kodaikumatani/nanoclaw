@@ -17,6 +17,7 @@
  * + approval handlers via this module's public API.
  */
 import { onDeliveryAdapterReady } from '../../delivery.js';
+import { readEnvFile } from '../../env.js';
 import { registerResponseHandler, onShutdown } from '../../response-registry.js';
 import { handleApprovalsResponse } from './response-handler.js';
 import { startOneCLIApprovalHandler, stopOneCLIApprovalHandler } from './onecli-approvals.js';
@@ -28,7 +29,11 @@ export type { ApprovalHandler, ApprovalHandlerContext, RequestApprovalOptions } 
 registerResponseHandler(handleApprovalsResponse);
 
 onDeliveryAdapterReady((adapter) => {
-  startOneCLIApprovalHandler(adapter);
+  // In native-credentials mode the OneCLI gateway is bypassed at spawn, so
+  // there is no gateway to long-poll for credential approvals — skip it.
+  if (readEnvFile(['NANOCLAW_NATIVE_CREDENTIALS']).NANOCLAW_NATIVE_CREDENTIALS !== 'true') {
+    startOneCLIApprovalHandler(adapter);
+  }
 });
 
 onShutdown(() => {

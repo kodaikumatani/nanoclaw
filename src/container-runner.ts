@@ -20,6 +20,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { materializeContainerJson } from './container-config.js';
+import { readEnvFile } from './env.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
@@ -255,7 +256,22 @@ function resolveProviderContribution(
         agentGroupId: agentGroup.id,
         groupDir: path.resolve(GROUPS_DIR, agentGroup.folder),
         selectedSkills: selectedSkillNames(containerConfig),
-        hostEnv: process.env,
+        // Provider config (e.g. opencode) reads provider/model/key settings
+        // from here. .env is intentionally NOT loaded into process.env (env.ts
+        // keeps secrets out of the process env so they don't leak to all child
+        // containers), so merge the provider-relevant keys read directly from
+        // .env. They end up as `-e` on this one container only.
+        hostEnv: {
+          ...process.env,
+          ...readEnvFile([
+            'OPENCODE_PROVIDER',
+            'OPENCODE_MODEL',
+            'OPENCODE_SMALL_MODEL',
+            'GEMINI_API_KEY',
+            'GOOGLE_GENERATIVE_AI_API_KEY',
+            'ANTHROPIC_BASE_URL',
+          ]),
+        },
       })
     : {};
   return { provider, contribution };
@@ -480,14 +496,24 @@ async function buildContainerArgs(
   // the gateway, we don't spawn. The caller (router or host-sweep) catches
   // the throw, leaves the inbound message pending, and the next sweep tick
   // retries.
-  if (agentIdentifier) {
-    await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
+  // Native-credentials mode (NANOCLAW_NATIVE_CREDENTIALS=true) bypasses the
+  // OneCLI gateway entirely: credentials are injected into the container env
+  // directly (Anthropic via native-credential-proxy, or a provider key such as
+  // GEMINI_API_KEY forwarded by the provider container config). Skip the
+  // gateway wiring so spawns don't require OneCLI to be installed/running.
+  const nativeCredentials = readEnvFile(['NANOCLAW_NATIVE_CREDENTIALS']).NANOCLAW_NATIVE_CREDENTIALS === 'true';
+  if (!nativeCredentials) {
+    if (agentIdentifier) {
+      await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
+    }
+    const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
+    if (!onecliApplied) {
+      throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
+    }
+    log.info('OneCLI gateway applied', { containerName });
+  } else {
+    log.info('Native credentials mode — skipping OneCLI gateway', { containerName });
   }
-  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
-  if (!onecliApplied) {
-    throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
-  }
-  log.info('OneCLI gateway applied', { containerName });
 
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');
